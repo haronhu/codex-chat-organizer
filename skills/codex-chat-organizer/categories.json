@@ -1,0 +1,7 @@
+{
+  "categories": ["循证标准", "评测执行", "数据分析", "原型设计", "代码开发", "文档写作", "工具自动化"],
+  "minimum_confidence": 0.9,
+  "meaningful_change_ratio": 0.15,
+  "meaningful_change_characters": 40,
+  "max_title_characters": 48
+}

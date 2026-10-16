@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+.DS_Store
+.runtime/
+*.sqlite*
+*.jsonl
+*-preview.json
+*-decisions.json
+*-plan.json
+*-inventory.json
+backups/
+*.zip
+*.env
