@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT/'skills/codex-chat-organizer/scripts/organizer.py'
@@ -241,6 +242,116 @@ class EngineTests(unittest.TestCase):
         self.assertFalse(o.generated_title('固定标题','在这台机器上安装 GitHub CLI'))
 
 
+class CurrentRenameTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.store = o.Store(Path(self.temp.name)/'state.sqlite')
+        self.source = FakeSource()
+        self.caller = patch.dict(o.os.environ,{'CODEX_THREAD_ID':'test-id'})
+        self.caller.start()
+        self.context = {'surface':'main','binding_source':'caller','caller_thread_id':'test-id','main_thread_id':'test-id','kind':'codex','hostId':'local'}
+    def tearDown(self):
+        self.caller.stop();self.store.close();self.temp.cleanup()
+    def live(self, status='idle'):
+        t = self.source.threads[0]
+        return {'id':t['id'],'title':t['title'],'status':status,'kind':'codex','hostId':'local','checked_at':time.time()}
+    def plan(self):
+        return o.current_plan(self.source,self.store,self.context,'[工具自动化] 当前主会话')
+    def test_exact_shortcut_with_optional_title(self):
+        self.assertEqual(o.shortcut_request('改一个会话名'),{'mode':'current','title':None})
+        self.assertEqual(o.shortcut_request('改一个会话名：我的新标题')['title'],'我的新标题')
+        self.assertEqual(o.shortcut_request('给当前会话改名')['mode'],'current')
+    def test_feature_requests_and_quotes_not_execution_consent(self):
+        for request in ('加一个功能：发送“改一个会话名”的时候修改主会话','他说“改一个会话名”','不要改一个会话名','改一个会话名并改所有会话'):
+            self.assertIsNone(o.shortcut_request(request))
+    def test_main_target_uses_actual_caller(self):
+        self.assertEqual(o.resolve_current_target(self.context),'test-id')
+        with self.assertRaises(ValueError):
+            o.resolve_current_target({**self.context,'main_thread_id':'wrong'})
+    def test_sidebar_requires_distinct_explicit_main_binding(self):
+        with patch.dict(o.os.environ,{'CODEX_THREAD_ID':'side-id'}):
+            context={**self.context,'surface':'sidebar','caller_thread_id':'side-id','binding_source':'host_context'}
+            self.assertEqual(o.resolve_current_target(context),'test-id')
+            self.assertEqual(o.resolve_current_target({**context,'binding_source':'user_reference'}),'test-id')
+            for update in ({'main_thread_id':'side-id'},{'binding_source':'recency'},{'main_thread_id':None}):
+                with self.assertRaises(ValueError):o.resolve_current_target({**context,**update})
+    def test_missing_caller_or_unknown_surface_fails_closed(self):
+        for update in ({'caller_thread_id':'other'},{'surface':'unknown'},{'hostId':'remote'},{'kind':'chatgpt'}):
+            with self.assertRaises(ValueError):o.resolve_current_target({**self.context,**update})
+        with patch.dict(o.os.environ,{'CODEX_THREAD_ID':''}):
+            with self.assertRaises(ValueError):o.resolve_current_target(self.context)
+    def test_single_plan_does_not_scan_other_chats(self):
+        with patch.object(self.source,'inventory',side_effect=AssertionError('Must not scan')):
+            action=self.plan()
+        self.assertEqual(action['id'],'test-id')
+        self.assertEqual(self.source.reads,0)
+        self.assertEqual(self.store.db.execute('SELECT COUNT(*) FROM observed').fetchone()[0],1)
+    def test_active_current_rename_records_and_verifies(self):
+        self.source.threads[0]['status']='inProgress'
+        action=self.plan()
+        op=o.begin(self.source,self.store,action,self.live('active'))
+        self.assertEqual(self.source.threads[0]['title'],action['old_title'])
+        self.assertEqual(self.store.pending()[0]['old_title'],action['old_title'])
+        self.source.threads[0]['title']=action['new_title']
+        record=o.finish(self.source,self.store,op['operation_id'],'success',self.live('active'))
+        self.assertEqual(record['state'],'success')
+        self.assertTrue(self.store.get('codex:local:test-id')['protected'])
+    def test_sidebar_renames_bound_main_not_itself(self):
+        self.source.threads.append({**self.source.threads[0],'id':'side-id','title':'侧边栏聊天'})
+        with patch.dict(o.os.environ,{'CODEX_THREAD_ID':'side-id'}):
+            context={**self.context,'surface':'sidebar','caller_thread_id':'side-id','binding_source':'host_context'}
+            action=o.current_plan(self.source,self.store,context,'主会话新标题')
+            op=o.begin(self.source,self.store,action,self.live('active'))
+            self.source.threads[0]['title']=action['new_title']
+            o.finish(self.source,self.store,op['operation_id'],'success',self.live('active'))
+        self.assertEqual(self.source.threads[0]['title'],'主会话新标题')
+        self.assertEqual(self.source.threads[1]['title'],'侧边栏聊天')
+    def test_explicit_current_rename_preserves_batch_protection(self):
+        self.store.save('codex:local:test-id',{'protected':True,'protection_reason':'manual_confirmation'})
+        action=self.plan();op=o.begin(self.source,self.store,action,self.live())
+        self.source.threads[0]['title']=action['new_title']
+        o.finish(self.source,self.store,op['operation_id'],'success',self.live())
+        self.assertEqual(o.scan(self.source,self.store,full=True)['candidates'],[])
+    def test_caller_change_between_plan_and_begin_blocks(self):
+        action=self.plan()
+        with patch.dict(o.os.environ,{'CODEX_THREAD_ID':'other'}):
+            with self.assertRaises(ValueError):o.begin(self.source,self.store,action,self.live())
+        self.assertFalse(self.store.pending())
+    def test_unknown_or_unloaded_still_blocks(self):
+        action=self.plan()
+        for status in ('notLoaded','unknown','waitingForApproval'):
+            with self.assertRaises(ValueError):o.begin(self.source,self.store,action,self.live(status))
+    def test_protected_batch_rename_remains_blocked(self):
+        action=self.plan();action['operation']='rename'
+        old=self.store.get('codex:local:test-id');old.update(protected=True,approved_action=action);self.store.save('codex:local:test-id',old)
+        with self.assertRaises(ValueError):o.begin(self.source,self.store,action,self.live())
+    def test_unchanged_title_no_write(self):
+        result=o.current_plan(self.source,self.store,self.context,self.source.threads[0]['title'])
+        self.assertEqual(result['status'],'unchanged');self.assertFalse(self.store.pending())
+        self.assertFalse(self.store.get('codex:local:test-id'))
+    def test_pending_or_archived_main_not_overwritten(self):
+        action=self.plan();o.begin(self.source,self.store,action,self.live())
+        with self.assertRaises(ValueError):self.plan()
+        self.source.threads[0]['archived']=1
+        with self.assertRaises(ValueError):self.plan()
+    def test_title_conflict_and_unverified_success_block(self):
+        action=self.plan();self.source.threads[0]['title']='人工新标题'
+        with self.assertRaises(ValueError):o.begin(self.source,self.store,action,self.live())
+        action=self.plan();op=o.begin(self.source,self.store,action,self.live())
+        with self.assertRaises(ValueError):o.finish(self.source,self.store,op['operation_id'],'success',self.live())
+        self.assertEqual(len(self.store.pending()),1)
+    def test_current_history_can_restore_after_completion(self):
+        action=self.plan();op=o.begin(self.source,self.store,action,self.live())
+        self.source.threads[0]['title']=action['new_title']
+        o.finish(self.source,self.store,op['operation_id'],'success',self.live())
+        restore=o.restore_plan(self.source,self.store,op['operation_id'])
+        restore_op=o.begin(self.source,self.store,restore,self.live())
+        self.source.threads[0]['title']=action['old_title']
+        o.finish(self.source,self.store,restore_op['operation_id'],'success',self.live())
+        self.assertEqual(self.source.threads[0]['title'],action['old_title'])
+        self.assertTrue(self.store.get('codex:local:test-id')['protected'])
+
+
 class SourceTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.home=Path(self.temp.name)
@@ -267,6 +378,34 @@ class SourceTests(unittest.TestCase):
     def test_read_only_enforced(self):
         with self.assertRaises(sqlite3.OperationalError):
             self.source.db.execute('UPDATE threads SET title=?',('broken',))
+    def test_single_get_does_not_enumerate_all_threads(self):
+        with patch.object(self.source,'inventory',side_effect=AssertionError('Must not scan')):
+            self.assertEqual(self.source.get('one')['title'],'显示名称')
+            self.assertIsNone(self.source.get('sub'))
+    def test_current_cli_plan_and_same_title_noop(self):
+        context={'surface':'main','binding_source':'caller','caller_thread_id':'one','main_thread_id':'one','kind':'codex','hostId':'local'}
+        context_path=self.home/'context.json';context_path.write_text(json.dumps(context))
+        output=self.home/'current-plan.json';state=self.home/'organizer.sqlite'
+        cmd=[sys.executable,str(SCRIPT),'--codex-home',str(self.home),'--state',str(state),'current-plan','--context',str(context_path),'--request','改一个会话名','--title','主会话新标题','--output',str(output)]
+        with patch.dict(o.os.environ,{'CODEX_THREAD_ID':'one'}):
+            result=subprocess.run(cmd,capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            action=json.loads(output.read_text());self.assertEqual(action['id'],'one')
+            self.assertEqual(action['operation'],'current_rename')
+            self.assertEqual(self.source.get('one')['title'],'显示名称')
+            self.assertEqual(self.source.get('two')['title'],'显示名称')
+            cmd[cmd.index('--title')+1]='显示名称'
+            result=subprocess.run(cmd,capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual(json.loads(output.read_text())['status'],'unchanged')
+            cmd[cmd.index('--request')+1]='请新增一个发送改一个会话名的功能'
+            result=subprocess.run(cmd,capture_output=True,text=True)
+            self.assertNotEqual(result.returncode,0)
+            cmd[cmd.index('--request')+1]='改一个会话名：用户指定标题'
+            result=subprocess.run(cmd,capture_output=True,text=True)
+            self.assertNotEqual(result.returncode,0)
+        store=o.Store(state)
+        self.assertFalse(store.pending());store.close()
     def test_user_messages_not_drowned_out_by_assistant_chatter(self):
         t=self.source.get('one');e=self.source.evidence(t)
         self.assertEqual(e['user_intents'],['首个问题','问题2','问题3','问题4','问题5'])

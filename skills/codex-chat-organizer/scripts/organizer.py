@@ -133,7 +133,14 @@ class LocalSource:
         return result
 
     def get(self, thread_id):
-        return next((x for x in self.inventory(True) if x['id'] == thread_id), None)
+        row = self.db.execute("SELECT id,COALESCE(NULLIF(name,''),title) AS title,first_user_message,updated_at,archived,source,thread_source FROM threads WHERE id=? AND source IN ('cli','vscode') AND thread_source='user'", (thread_id,)).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        turn = self.history.execute('SELECT status FROM thread_turns WHERE thread_id=? ORDER BY rollout_ordinal DESC LIMIT 1', (thread_id,)).fetchone()
+        item.update(status=turn['status'] if turn else 'unknown',kind='codex',hostId='local')
+        item['watermark'] = self.history.execute('SELECT COALESCE(MAX(rollout_ordinal),0) FROM thread_items WHERE thread_id=?', (thread_id,)).fetchone()[0]
+        return item
 
     def evidence(self, thread):
         rows = self.history.execute("SELECT item_json,item_type FROM thread_items WHERE thread_id=? AND item_type='userMessage' ORDER BY rollout_ordinal DESC LIMIT 4", (thread['id'],)).fetchall()
@@ -334,10 +341,73 @@ def make_plan(store, decisions):
     return result
 
 
+def shortcut_request(text):
+    """Exact command only; mentions in feature requests or quotations are not consent."""
+    match = re.fullmatch(r'(?:改一个会话名|给当前会话改名|改当前会话名)(?:[：:]\s*(.+?))?[。！!\s]*', text.strip())
+    return {'mode':'current','title':compact(match.group(1)) if match.group(1) else None} if match else None
+
+
+def resolve_current_target(context, caller_id=None):
+    """Context must come from the host/user-selected main chat, never transcript guesses."""
+    caller = caller_id if caller_id is not None else os.environ.get('CODEX_THREAD_ID')
+    if not caller or context.get('caller_thread_id') != caller:
+        raise ValueError('Current caller ID missing or mismatched')
+    if context.get('kind') != 'codex' or context.get('hostId') != 'local':
+        raise ValueError('Current shortcut supports local Codex chats only')
+    target = context.get('main_thread_id')
+    if not isinstance(target,str) or not target.strip():
+        raise ValueError('Main chat binding missing; ask for an explicit main chat reference')
+    surface = context.get('surface')
+    binding = context.get('binding_source')
+    if surface == 'main':
+        if target != caller or binding != 'caller':
+            raise ValueError('Main surface must target the calling chat')
+    elif surface == 'sidebar':
+        if target == caller or binding not in ('host_context','user_reference'):
+            raise ValueError('Sidebar requires a distinct, explicitly bound main chat')
+    else:
+        raise ValueError('Unknown chat surface; do not infer target from recency or cwd')
+    return target
+
+
+def current_plan(source, store, context, title):
+    target = resolve_current_target(context)
+    current = source.get(target)
+    if not current or current.get('archived'):
+        raise ValueError('Main chat unavailable or archived')
+    title = compact(title)
+    if not title or len(title) > CONFIG['max_title_characters'] or safe_text(title) != title or '[REDACTED]' in title:
+        raise ValueError('Invalid current-chat title')
+    if title == current['title']:
+        return {'status':'unchanged','id':target,'title':title}
+    key = thread_key(current)
+    with store.transaction():
+        if store.pending(key):
+            raise ValueError('Pending operation must be reconciled first')
+        old = store.get(key)
+        action = {'id':target,'kind':'codex','hostId':'local','old_title':current['title'],
+                  'new_title':title,'operation':'current_rename','context':context,
+                  'watermark':current['watermark'],'protect_after':True,
+                  'reason':'User-requested current main chat rename'}
+        action['action_hash'] = digest(action)
+        old['approved_action'] = action
+        store.save(key,old)
+        return action
+
+
+def current_scope(action):
+    if action.get('operation') != 'current_rename':
+        return False
+    if resolve_current_target(action.get('context',{})) != action['id']:
+        raise ValueError('Current rename target differs from bound main chat')
+    return True
+
+
 def require_live(live, action, expected_title):
     if live.get('id') != action['id'] or live.get('title') != expected_title:
         raise ValueError('Fresh application title does not match; do not write')
-    if live.get('status') not in TERMINAL:
+    allowed = TERMINAL | {'active','inProgress'} if current_scope(action) else TERMINAL
+    if live.get('status') not in allowed:
         raise ValueError('Conversation active, awaiting input, or unknown; do not write')
     if live.get('hostId','local') != 'local' or live.get('kind','codex') != 'codex':
         raise ValueError('V1 supports local Codex conversations only')
@@ -352,12 +422,15 @@ def begin(source, store, action, live):
     with store.transaction():
         old = store.get(key)
         expected = old.get('approved_action')
-        if old.get('protected') or not expected or expected != action:
+        direct = current_scope(action)
+        confirmed_restore = action.get('operation') == 'restore' and action.get('confirmed_current_restore') is True
+        if (old.get('protected') and not direct and not confirmed_restore) or not expected or expected != action:
             raise ValueError('Action not approved or conversation protected')
         if store.pending(key):
             raise ValueError('Pending operation must be reconciled first')
         current = source.get(action['id'])
-        if not current or current['title'] != action['old_title'] or current['status'] not in TERMINAL:
+        allowed = TERMINAL | {'active','inProgress'} if direct else TERMINAL
+        if not current or current['title'] != action['old_title'] or current['status'] not in allowed:
             raise ValueError('Local title/status changed; do not write')
         if action['operation'] == 'rename' and current['watermark'] != action['watermark']:
             raise ValueError('Conversation content changed after preview; rescan')
@@ -427,7 +500,7 @@ def restore_plan(source, store, operation_id):
     if not row or row['state'] != 'success':
         raise ValueError('Only successful recorded operations can be restored')
     record = json.loads(row['value'])
-    if record['operation'] != 'rename':
+    if record['operation'] not in ('rename','current_rename'):
         raise ValueError('Cannot restore a restoration')
     current = source.get(record['id'])
     if not current or current['title'] != record['new_title']:
@@ -435,11 +508,14 @@ def restore_plan(source, store, operation_id):
     key = thread_key(record)
     with store.transaction():
         old = store.get(key)
-        if old.get('protected') or store.pending(key):
+        confirmed_restore = record['operation'] == 'current_rename' and old.get('managed_title') == record['new_title'] and old.get('protection_reason') == 'manual_confirmation'
+        if (old.get('protected') and not confirmed_restore) or store.pending(key):
             raise ValueError('Protected or pending conversation')
         action = {'id':record['id'],'kind':record['kind'],'hostId':record['hostId'],
                   'old_title':record['new_title'],'new_title':record['old_title'],
                   'operation':'restore','restore_of':operation_id,'watermark':current['watermark']}
+        if confirmed_restore:
+            action['confirmed_current_restore'] = True
         action['action_hash'] = digest(action)
         old['approved_action'] = action
         store.save(key,old)
@@ -477,6 +553,11 @@ def parser():
     s = sub.add_parser('plan')
     s.add_argument('--decisions',required=True)
     s.add_argument('--output',required=True)
+    s = sub.add_parser('current-plan',help='Explicitly requested current main chat only; no full scan')
+    s.add_argument('--context',required=True,help='Trusted host/main-chat binding, not conversation text')
+    s.add_argument('--request',required=True,help='Exact current user rename command, not a quotation')
+    s.add_argument('--title',required=True)
+    s.add_argument('--output',required=True)
     s = sub.add_parser('begin',help='Persist rollback intent before calling set_thread_title')
     s.add_argument('--action',required=True)
     s.add_argument('--live',required=True)
@@ -512,7 +593,7 @@ def main(argv=None):
     source = None
     store = Store(args.state)
     try:
-        if args.command in ('scan','begin','finish','restore-plan'):
+        if args.command in ('scan','begin','finish','restore-plan','current-plan'):
             source = LocalSource(args.codex_home)
         if args.command == 'scan':
             result = scan(source,store,args.full,args.include_archived,args.exclude,load_json(args.live_inventory) if args.live_inventory else None)
@@ -522,6 +603,15 @@ def main(argv=None):
             result = make_plan(store,load_json(args.decisions))
             write_json(args.output,result)
             print(json.dumps({k:len(result[k]) for k in ('actions','suggestions','unchanged')}))
+        elif args.command == 'current-plan':
+            request = shortcut_request(args.request)
+            if not request:
+                raise ValueError('Not an explicit current-chat rename command')
+            if request['title'] is not None and request['title'] != compact(args.title):
+                raise ValueError('Generated title differs from user-specified title')
+            result = current_plan(source,store,load_json(args.context),args.title)
+            write_json(args.output,result)
+            print(json.dumps({'id':result['id'],'status':result.get('status','planned')}))
         elif args.command == 'begin':
             print(json.dumps(begin(source,store,load_json(args.action),load_json(args.live)),ensure_ascii=False))
         elif args.command == 'finish':
