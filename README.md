@@ -131,11 +131,13 @@ python3 skills/codex-chat-organizer/scripts/organizer.py --help
 
 ```text
 codex-chat-organizer/
+├── LICENSE
 ├── README.md
 ├── install.py
 ├── skills/
 │   └── codex-chat-organizer/
 │       ├── SKILL.md
+│       ├── LICENSE.txt
 │       ├── agents/openai.yaml
 │       ├── categories.json
 │       └── scripts/organizer.py
@@ -147,6 +149,8 @@ codex-chat-organizer/
 
 欢迎通过 [Issues](https://github.com/haronhu/codex-chat-organizer/issues) 反馈，说明操作系统、宿主版本、可用工具与脱敏错误。
 
-当前尚未指定开源许可证。公开可见不等于授予开源使用、修改或再分发许可；许可证选择由维护者另行确认。
+本项目采用 [MIT License](LICENSE)，允许使用、复制、修改、合并、发布、分发、再许可和销售，包括商业使用。分发软件副本或实质性部分时，须保留版权声明和许可证声明；软件按“原样”提供，不作担保。
+
+独立安装的 Skill 目录也包含 [LICENSE.txt](skills/codex-chat-organizer/LICENSE.txt)，确保安装或再分发技能时保留完整许可声明。
 
 参考：[官方 Build skills 文档](https://learn.chatgpt.com/docs/build-skills)。本项目是社区 Skill 仓库，不是 OpenAI 官方项目，未发布到官方插件目录。

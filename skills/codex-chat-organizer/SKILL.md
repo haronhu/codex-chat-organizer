@@ -1,5 +1,6 @@
 ---
 name: codex-chat-organizer
+license: MIT
 description: 改一个会话名、给当前会话改名：仅修改当前主会话，支持明确绑定主会话的侧边栏快捷请求。也支持 Codex 本机会话的全量和增量分类整理、标题保护、修改记录与恢复；不移动文件夹，不适用于云端或 ChatGPT 会话。
 ---
 
