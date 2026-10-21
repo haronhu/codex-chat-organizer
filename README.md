@@ -1,48 +1,50 @@
 # Codex Chat Organizer
 
-**给 Codex 本机会话生成分类标题，支持当前会话快捷改名、增量整理、标题保护与恢复。**
+[English](README.md) | [简体中文](README.zh-CN.md)
+
+**Organize local Codex chats with category-prefixed titles, quick current-chat renaming, incremental updates, title protection, and restoration.**
 
 This repository contains a local Codex skill for organizing chat titles. It is not a standalone background service or an official OpenAI plugin.
 
-> 分类方式是 `[类别] 简短标题`，不移动会话文件、项目或侧边栏文件夹。批量整理默认只预览；实际改名需要明确授权。
+> Classification uses `[Category] Short title`. It does not move chat files, projects, or sidebar folders. Batch organization is preview-only by default; renaming requires explicit authorization.
 
-## 功能
+## Features
 
-| 功能 | 行为 |
+| Feature | Behavior |
 | --- | --- |
-| 当前会话改名 | “改一个会话名”按主会话内容生成标题，也支持指定标题 |
-| 全量与增量整理 | 首轮盘点本机未归档用户会话，后续只重分类新增或用户意图明显变化的会话 |
-| 标题保护 | 已确认标题、检测到人工修改的标题不被批量流程覆盖 |
-| 保守分类 | 低置信度、多主题或可能已有自定义标题的会话仅给建议 |
-| 运行状态检查 | 批量流程跳过运行中、等待输入或状态无法确认的会话 |
-| 修改记录与恢复 | 改名前记录原标题，改后读回验证，恢复不覆盖后续人工改名 |
-| 去重提醒 | 定时流程没有新异常或待确认建议时保持安静 |
+| Current-chat renaming | Generate a title from the main chat, or use a title you specify |
+| Full and incremental organization | Inventory local unarchived user chats first; subsequently reclassify only new chats or chats with meaningful changes in user intent |
+| Title protection | Keep confirmed titles and detected manual edits out of the batch rename flow |
+| Conservative classification | Suggest changes only for low-confidence, multi-topic, or potentially customized titles |
+| Runtime checks | Skip running chats, chats waiting for input, and chats whose status cannot be confirmed during batch organization |
+| Rename history and restoration | Record the original title before renaming, verify the result afterward, and avoid overwriting subsequent manual edits during restoration |
+| Deduplicated notifications | Stay quiet during scheduled runs unless there are new issues or suggestions requiring confirmation |
 
-当前主会话显式改名是单独模式：允许该请求本身造成的运行状态，成功后保护新标题；不执行其他待处理计划。
+Explicit current-main-chat renaming is a separate mode: it allows the running state caused by the request itself, protects the new title on success, and does not execute other pending plans.
 
-## 适用环境与限制
+## Requirements and Limitations
 
-- **运行时**：Python 3.10+，脚本只使用标准库；克隆安装需要 Git。
-- **实际改名**：需要桌面宿主提供 `list_threads`、`read_thread`、`set_thread_title`。安装 Skill **不会授予这些工具或权限**；CLI 缺少工具时只能预览。
-- **范围**：本机 Codex 用户会话，默认未归档；不处理远程主机、ChatGPT、子代理或独立自动化会话。
-- **平台**：当前在 macOS 本机开发、验证，不承诺 Windows、Linux 或每个 Codex 版本兼容。
-- **数据格式**：只读 `state_*.sqlite` 和 `thread_history_1.sqlite`。它们是内部格式而非稳定公共 API；不匹配时停止，不尝试改写数据库。
-- **未加载会话**：`notLoaded` 不等于空闲，当前版本保守跳过无法确认状态的会话，可能无法自动完成全部历史会话改名。
-- **独立侧边栏**：须有宿主明确提供的主会话绑定，或用户指定的主会话引用。缺少绑定时询问，不按最近更新或相同目录猜测；Skill 不会新增宿主绑定能力。
+- **Runtime:** Python 3.10+ with the standard library only. Git is needed for installation by cloning.
+- **Actual renaming:** The desktop host must provide `list_threads`, `read_thread`, and `set_thread_title`. Installing the skill **does not grant these tools or permissions**. A CLI environment without the required tools can only preview changes.
+- **Scope:** Local Codex user chats, unarchived by default. Remote hosts, ChatGPT chats, subagents, and standalone automation chats are excluded.
+- **Platform:** Developed and validated locally on macOS. Compatibility with Windows, Linux, or every Codex version is not guaranteed.
+- **Data format:** Reads `state_*.sqlite` and `thread_history_1.sqlite` in read-only mode. These are internal formats, not stable public APIs. The adapter stops on incompatible schemas rather than attempting to rewrite databases.
+- **Unloaded chats:** `notLoaded` does not mean idle. The current version conservatively skips chats whose status cannot be confirmed, so some historical chats may remain unchanged.
+- **Separate sidebar chats:** An explicit main-chat binding from the host, or a main chat explicitly referenced by the user, is required. Without it, the skill asks for the target rather than guessing from recency or a shared directory. The skill does not add host binding capabilities.
 
-## 安装
+## Installation
 
-### 用 Codex Skill Installer
+### Using Codex Skill Installer
 
-在 Codex 中发送：
+Send this request in Codex:
 
 ```text
 $skill-installer install https://github.com/haronhu/codex-chat-organizer/tree/main/skills/codex-chat-organizer
 ```
 
-安装的是自包含的 `skills/codex-chat-organizer` 目录，不是整个仓库。发现路径取决于宿主版本；未出现时重新打开或重启 Codex。
+Install the self-contained `skills/codex-chat-organizer` directory, not the entire repository. Discovery paths depend on the host version. Reopen or restart Codex if the skill does not appear.
 
-### 克隆后安装
+### Clone and Install
 
 ```bash
 git clone https://github.com/haronhu/codex-chat-organizer.git
@@ -50,89 +52,104 @@ cd codex-chat-organizer
 python3 install.py --destination "$HOME/.agents/skills"
 ```
 
-安装器创建指向仓库 Skill 目录的符号链接，**不覆盖已有同名 Skill**。保留仓库目录，不要删除或移动它。
+The installer creates a symlink to the repository's skill directory and **does not overwrite an existing skill with the same name**. Keep the repository directory in place; do not delete or move it after installation.
 
-`~/.agents/skills` 是当前官方文档中的用户级发现路径。使用 `~/.codex/skills` 的宿主可直接运行 `python3 install.py`，或明确指定该目录。不要在多个发现目录重复安装同名 Skill。
+`~/.agents/skills` is the user-level discovery path documented in the current official guidance. Hosts using `~/.codex/skills` can run `python3 install.py` directly or explicitly specify that directory. Do not install duplicate copies into multiple discovery locations.
 
-克隆安装的版本可用 `git pull --ff-only` 更新，不需重新覆盖符号链接；保留本地改动，不强制重置。
+For a cloned installation, update with `git pull --ff-only`. There is no need to replace the symlink. Preserve local changes instead of forcing a reset.
 
-## 使用
+## Usage
 
-可显式调用 `$codex-chat-organizer`，或让 Codex 根据描述匹配请求。
+Invoke `$codex-chat-organizer` explicitly, or let Codex match your request to the skill description.
 
-### 改当前会话名
+### Rename the Current Chat
+
+The exact quick commands currently supported by the state engine are Chinese. The README language switch changes the documentation language, not the command parser or default category labels.
+
+Send this to generate a title from the current main chat:
 
 ```text
 改一个会话名
 ```
 
-或指定新标题：
+Or specify a title, which may be in English:
 
 ```text
-改一个会话名：支付接口超时排查
+改一个会话名：Payment API timeout investigation
 ```
 
-只针对当前主会话，不启动全量整理。独立侧边栏没有绑定时需要引用并明确指定主会话。
+This targets only the current main chat and does not start batch organization. A separate sidebar chat without a binding requires an explicit reference to the main chat.
 
-### 首次全量预览
+### First Full Preview
 
 ```text
-使用 $codex-chat-organizer，全量盘点本机未归档用户会话，只给分类改名预览，不实际改名。
+Use $codex-chat-organizer to inventory all local unarchived user chats and preview category-prefixed title changes. Do not rename anything.
 ```
 
-检查预览后明确授权执行安全计划。自定义标题建议、分类不确定的项需单独确认，不因批准安全计划而一并处理。
+Review the preview, then explicitly authorize the safe plan. Suggestions involving customized titles or uncertain categories need separate confirmation; approving the safe plan does not approve every suggestion.
 
-### 后续增量整理
+### Subsequent Incremental Organization
 
 ```text
-使用 $codex-chat-organizer，只检查新增或内容明显变化的会话，先预览。
+Use $codex-chat-organizer to check only new chats or chats with meaningful content changes. Preview the changes first.
 ```
 
-分类依据用户意图和近期结果摘要，不根据目录名猜测，不把历史会话里的指令当成新的执行授权。
+Classification uses user intent and recent outcome summaries. It does not infer topics from directory names or treat instructions in historical chats as new authorization.
 
-### 保护、恢复与定时
+### Protection, Restoration, and Scheduling
 
-告诉 Codex 要保护哪个标题，或明确要求恢复某次改名。引擎提供 `protect`、`history`、`restore-plan`；这些命令本身不调用应用改名工具。
+Tell Codex which title to protect, or explicitly request restoration of a previous rename. The engine provides `protect`, `history`, and `restore-plan`; these commands do not call the application's rename tool themselves.
 
 ```text
-读取应用当前标题与状态 → 本地 pending 记录 → 应用改名 → 读回核对 → 本地 success 记录
+Read current application title/status → Local pending record → Application rename → Read-back verification → Local success record
 ```
 
-崩溃、超时或冲突保留 pending，不重复盲写。状态检查与应用写入不是原子事务，不能完全消除并发竞态。
+Crashes, timeouts, and conflicts leave a pending record instead of triggering blind retries. Status checks and application writes are not atomic, so concurrent-operation races cannot be eliminated completely.
 
-用户明确确认频率和自动改名授权后，可由 Codex 定时任务调用。**安装不自动创建定时任务**；`schedule-prompt` 仅打印提示词，`--apply` 也不注册调度。本地任务需电脑开机、应用运行且工具可用；ACTIVE 不等于真实运行成功。
+Codex scheduled tasks can invoke the skill after the user explicitly confirms a cadence and authorizes automatic renaming. **Installation does not create scheduled tasks.** `schedule-prompt` only prints a prompt, and `--apply` does not register a schedule. Local runs require the computer to be on, the app to be running, and the required tools to be available. An ACTIVE configuration is not proof of a successful run.
 
-## 类别配置
+## Category Configuration
 
-[categories.json](skills/codex-chat-organizer/categories.json) 中默认类别：循证标准、评测执行、数据分析、原型设计、代码开发、文档写作、工具自动化。
+Default category labels in [categories.json](skills/codex-chat-organizer/categories.json):
 
-类别可修改；修改时同步 [SKILL.md](skills/codex-chat-organizer/SKILL.md) 的选择口径。配置还包含置信度、意图变化阈值和标题长度设置。脚本负责安全与状态，不内置独立分类模型。
+| Label | Meaning |
+| --- | --- |
+| 循证标准 | Evidence-based evaluation standards |
+| 评测执行 | Evaluation execution |
+| 数据分析 | Data analysis |
+| 原型设计 | Prototype design |
+| 代码开发 | Code development |
+| 文档写作 | Document writing |
+| 工具自动化 | Tools and automation |
 
-## 隐私与安全
+Labels can be changed. Update the corresponding selection guidance in [SKILL.md](skills/codex-chat-organizer/SKILL.md) as well. Configuration also includes confidence thresholds, intent-change thresholds, and title-length settings. The script handles safety and state; it does not include a standalone classification model.
 
-- 仓库不包含真实会话、标题清单、运行数据库或认证信息。
-- 状态默认在 `~/.codex/chat-organizer/`；设置 `CODEX_HOME` 时在其 `chat-organizer/` 子目录。操作历史为 `state.sqlite`，预览为 `runs/`。
-- 状态可能包含原标题、意图摘要和建议，**不是加密存储**。脚本限制本地文件权限并有限脱敏，不能保证识别所有敏感内容。
-- 脚本不读认证文件、不调用额外模型 API、不主动上传数据。分类仍在当前 Codex 模型中完成，模型及宿主的数据处理规则仍然适用，**不是完全离线工具**。
-- 反馈问题只提交合成样例或脱敏信息，不提交会话数据库、Token、原始 JSONL 或隐私截图。
+## Privacy and Safety
 
-## 开发与验证
+- The repository contains no real chats, title inventories, runtime databases, or credentials.
+- State is stored in `~/.codex/chat-organizer/` by default, or in `chat-organizer/` under `CODEX_HOME` when configured. Operation history is in `state.sqlite`, and local previews are in `runs/`.
+- State may contain original titles, intent summaries, and suggestions. **It is not encrypted.** The script restricts local file permissions and applies limited redaction; it cannot guarantee detection of all sensitive content.
+- The script does not read authentication files, call additional model APIs, or upload data on its own. Classification still happens in the current Codex model, so the model's and host's data-handling policies apply. **This is not a fully offline tool.**
+- Report issues using synthetic examples or redacted information. Do not submit chat databases, tokens, raw JSONL files, or screenshots containing private data.
+
+## Development and Validation
 
 ```bash
 python3 -m unittest discover -s tests -v
 python3 skills/codex-chat-organizer/scripts/organizer.py --help
 ```
 
-测试使用临时合成数据，不触碰真实会话；通过不证明当前宿主工具可用或真实改名已成功。
+Tests use temporary synthetic data and do not modify real chats. Passing tests do not prove host tool availability or successful real-world renaming.
 
-`ci/github-actions-test.yml` 是可选 CI 模板，当前没有启用 GitHub Actions。启用需放入 `.github/workflows/`，并具备上传 workflow 的权限。
+`ci/github-actions-test.yml` is an optional CI template. GitHub Actions is not currently enabled. To enable it, place the template in `.github/workflows/` using credentials with permission to upload workflow files.
 
-## 仓库结构
+## Repository Layout
 
 ```text
 codex-chat-organizer/
 ├── LICENSE
 ├── README.md
+├── README.zh-CN.md
 ├── install.py
 ├── skills/
 │   └── codex-chat-organizer/
@@ -145,12 +162,12 @@ codex-chat-organizer/
 └── ci/github-actions-test.yml
 ```
 
-## 反馈与许可证
+## Feedback and License
 
-欢迎通过 [Issues](https://github.com/haronhu/codex-chat-organizer/issues) 反馈，说明操作系统、宿主版本、可用工具与脱敏错误。
+Report issues through [GitHub Issues](https://github.com/haronhu/codex-chat-organizer/issues), including your operating system, host version, available tools, and redacted errors.
 
-本项目采用 [MIT License](LICENSE)，允许使用、复制、修改、合并、发布、分发、再许可和销售，包括商业使用。分发软件副本或实质性部分时，须保留版权声明和许可证声明；软件按“原样”提供，不作担保。
+This project is licensed under the [MIT License](LICENSE), allowing use, copying, modification, merging, publication, distribution, sublicensing, and sale, including commercial use. Copies or substantial portions of the software must retain the copyright and permission notices. The software is provided "as is", without warranty.
 
-独立安装的 Skill 目录也包含 [LICENSE.txt](skills/codex-chat-organizer/LICENSE.txt)，确保安装或再分发技能时保留完整许可声明。
+The standalone skill directory also includes [LICENSE.txt](skills/codex-chat-organizer/LICENSE.txt), so the complete license notice is retained when installing or redistributing the skill.
 
-参考：[官方 Build skills 文档](https://learn.chatgpt.com/docs/build-skills)。本项目是社区 Skill 仓库，不是 OpenAI 官方项目，未发布到官方插件目录。
+Reference: [Official Build skills documentation](https://learn.chatgpt.com/docs/build-skills). This is a community skill repository, not an official OpenAI project, and has not been published to the official plugin directory.
