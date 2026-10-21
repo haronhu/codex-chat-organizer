@@ -3,6 +3,10 @@ __pycache__/
 .venv/
 .DS_Store
 .runtime/
+work/
+outputs/
+runs/
+*.log
 *.sqlite*
 *.jsonl
 *-preview.json
@@ -12,3 +16,5 @@ __pycache__/
 backups/
 *.zip
 *.env
+.env
+.env.*

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex 会话整理"
+  short_description: "当前会话快捷改名与增量分类整理，保护已有标题，保留修改记录并支持恢复"
+  default_prompt: "使用 $codex-chat-organizer，先给出本机未归档会话的分类改名预览，不实际改名。"
